@@ -2,9 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>BallBlockers</title>
-    <link rel="stylesheet" href="./style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./src/style.css">
   </head>
   <body>
     <div id="ui-layer">
@@ -23,12 +26,28 @@
           <button id="btn-4player">4 Players</button>
         </div>
       </div>
+      <div id="difficulty-screen" class="overlay">
+        <h1>Difficulty</h1>
+        <p>Choose your challenge</p>
+        <div class="button-container">
+          <button id="btn-easy">Easy</button>
+          <button id="btn-medium">Medium</button>
+          <button id="btn-hard">Hard</button>
+        </div>
+      </div>
       <div id="win-screen" class="overlay">
         <h1 id="win-text">Team 1 Wins!</h1>
         <button id="btn-restart">Play Again</button>
       </div>
+      <div id="pause-screen" class="overlay">
+        <h1>Paused</h1>
+        <div class="button-container">
+          <button id="btn-resume">Resume</button>
+          <button id="btn-main-menu">Main Menu</button>
+        </div>
+      </div>
     </div>
     <canvas id="game-canvas"></canvas>
-    <script type="module" src="./main.js"></script>
+    <script type="module" src="./src/main.js"></script>
   </body>
 </html>
