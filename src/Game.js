@@ -21,6 +21,7 @@ export class Game {
     const initialGoalSize = Math.min(width, height) * Settings.GOAL_SIZE_FRACTION;
     this.goalSizes = { team1: initialGoalSize, team2: initialGoalSize, team3: initialGoalSize };
     this.goalDepth = Math.min(width * 0.07, Settings.MAX_GOAL_DEPTH);
+    this.goalOffset = Math.min(width, height) * 0.25;
     this.puckRadius = Math.min(width, height) * Settings.PUCK_RADIUS_FRACTION;
     this.splitInterval = Settings.SPLIT_INTERVAL;
     this.possessionThreshold = Settings.POSSESSION_THRESHOLD;
@@ -32,6 +33,7 @@ export class Game {
     this.goalFlashTimer = 0;
     this.goalFlashDuration = 0.6;
     this.lastScoredGoalTeam = null;
+    this.lastScoredGoalWall = null;
     this.lastScoredGoalX = 0;
     this.lastScoredGoalY = 0;
     this.lastScoredByTeam = null;
@@ -48,7 +50,7 @@ export class Game {
   onResize(width, height) {
     this.width = width;
     this.height = height;
-    // Scale existing elements roughly
+    this.goalOffset = Math.min(width, height) * 0.25;
   }
 
   initPlayers() {
@@ -129,14 +131,16 @@ export class Game {
       possessionTimer: 0,
       timeSinceLastSplit: 0,
       lastX: spawnX,
-      lastY: spawnY
+      lastY: spawnY,
+      speedBoost: 0,
     });
   }
 
-  onGoalScored(goalTeam, lastHitTeam, puckX, puckY) {
+  onGoalScored(goalTeam, lastHitTeam, puckX, puckY, wall = null) {
     // Start the goal flash effect with the scoring player's color at the exact goal position
     this.goalFlashTimer = this.goalFlashDuration;
     this.lastScoredGoalTeam = goalTeam;
+    this.lastScoredGoalWall = wall;
     this.lastScoredByTeam = lastHitTeam;
     this.lastScoredGoalX = puckX;
     this.lastScoredGoalY = puckY;
@@ -171,7 +175,7 @@ export class Game {
     // Shrink puck radius by 3% on each goal (minimum 1% of screen)
     const minPuckRadius = Math.min(this.width, this.height) * Settings.MIN_PUCK_RADIUS_FRACTION;
     this.puckRadius = Math.max(minPuckRadius, this.puckRadius * Settings.PUCK_RADIUS_SHRINK);
-    this.pucks.forEach(p => p.radius = this.puckRadius);
+    this.pucks.forEach(p => p.radius = Math.max(minPuckRadius, p.radius * Settings.PUCK_RADIUS_SHRINK));
 
     const scorerTeam = this.numPlayers === 3
       ? (lastHitTeam && lastHitTeam !== goalTeam ? lastHitTeam : null)
@@ -242,9 +246,14 @@ export class Game {
     const cy = this.height / 2;
 
     if (this.numPlayers === 3) {
-      goals.push({ x: 0, y: cy });
-      goals.push({ x: this.width, y: cy });
-      goals.push({ x: cx, y: 0 });
+      const d = this.goalOffset;
+      const cx = this.width / 2;
+      goals.push({ x: 0, y: d });               // Team 1 left wall
+      goals.push({ x: cx - d, y: this.height }); // Team 1 bottom wall
+      goals.push({ x: this.width, y: d });       // Team 2 right wall
+      goals.push({ x: cx + d, y: this.height }); // Team 2 bottom wall
+      goals.push({ x: d, y: 0 });               // Team 3 top wall left
+      goals.push({ x: this.width - d, y: 0 });  // Team 3 top wall right
     } else {
       goals.push({ x: 0, y: 0 });
       goals.push({ x: 0, y: this.height });
@@ -277,7 +286,8 @@ export class Game {
       possessionTimer: 0,
       timeSinceLastSplit: 0,
       lastX: x,
-      lastY: y
+      lastY: y,
+      speedBoost: 0,
     });
   }
 
@@ -287,8 +297,13 @@ export class Game {
       this.goalFlashTimer -= dt;
     }
 
-    // 1. Update pushers from input
+    // 1. Update pushers from input.
+    // Record where each pusher started so the physics step can sweep it along
+    // its path (a fast paddle must not tunnel through a puck).
     for (const pusher of this.pushers) {
+      pusher.prevX = pusher.x;
+      pusher.prevY = pusher.y;
+
       if (pusher.isAI) {
         this.aiController.update(pusher, this.pucks, {
           width: this.width,
@@ -379,34 +394,11 @@ export class Game {
 
         constrainPusher(pusher, minX, maxX, minY, maxY);
       }
-    }
 
-    // 2. Move Pucks
-    for (const puck of this.pucks) {
-      const speed = Math.hypot(puck.vx, puck.vy);
-      if (speed > 0) {
-        const targetSpeed = this.baseSpeed * this.speedMultiplier;
-        let newSpeed = speed;
-        
-        // Allow the puck to exceed targetSpeed when hit, then decay it via friction
-        if (speed > targetSpeed) {
-          // Slow down by a factor of the target speed to return to baseline
-          newSpeed -= targetSpeed * Settings.PUCK_FRICTION * dt;
-          if (newSpeed < targetSpeed) newSpeed = targetSpeed;
-        } else if (speed < targetSpeed) {
-          // Immediately recover to minimum target speed
-          newSpeed = targetSpeed;
-        }
-        
-        // Cap the maximum possible speed to prevent skipping through walls
-        const maxPuckSpeed = targetSpeed * Settings.MAX_IMPACT_SPEED_MULTIPLIER;
-        if (newSpeed > maxPuckSpeed) newSpeed = maxPuckSpeed;
-
-        puck.vx = (puck.vx / speed) * newSpeed;
-        puck.vy = (puck.vy / speed) * newSpeed;
-        puck.x += puck.vx * dt;
-        puck.y += puck.vy * dt;
-      }
+      // Final (constrained) position for this frame; the physics step sweeps
+      // the pusher from prevX/prevY to here.
+      pusher.finalX = pusher.x;
+      pusher.finalY = pusher.y;
     }
 
     // 2b. Periodic splitting: every 30s per puck, attempt to split existing pucks
@@ -421,142 +413,9 @@ export class Game {
       }
     }
 
-    // 3. Collisions
-    for (let i = this.pucks.length - 1; i >= 0; i--) {
-      const puck = this.pucks[i];
-
-      let hitGoalTeam = 0;
-
-      if (this.numPlayers === 3) {
-        const cx = this.width / 2;
-        const cy = this.height / 2;
-
-        // Left Wall
-        if (puck.x - puck.radius < 0) {
-          const g1 = this.goalSizes.team1;
-          if (puck.y > cy - g1 / 2 && puck.y < cy + g1 / 2) {
-            hitGoalTeam = 1;
-          } else {
-            puck.x = puck.radius;
-            puck.vx *= -1;
-          }
-        }
-        // Right Wall
-        if (puck.x + puck.radius > this.width) {
-          const g2 = this.goalSizes.team2;
-          if (puck.y > cy - g2 / 2 && puck.y < cy + g2 / 2) {
-            hitGoalTeam = 2;
-          } else {
-            puck.x = this.width - puck.radius;
-            puck.vx *= -1;
-          }
-        }
-        // Top Wall
-        if (puck.y - puck.radius < 0) {
-          const g3 = this.goalSizes.team3;
-          if (puck.x > cx - g3 / 2 && puck.x < cx + g3 / 2) {
-            hitGoalTeam = 3;
-          } else {
-            puck.y = puck.radius;
-            puck.vy *= -1;
-          }
-        }
-        // Bottom Wall (Solid in 3-player)
-        if (puck.y + puck.radius > this.height) {
-          puck.y = this.height - puck.radius;
-          puck.vy *= -1;
-        }
-      } else {
-        const g1 = this.goalSizes.team1;
-        const g2 = this.goalSizes.team2;
-        // Left Wall
-        if (puck.x - puck.radius < 0) {
-          if (puck.y < g1 || puck.y > this.height - g1) {
-            hitGoalTeam = 1;
-          } else {
-            puck.x = puck.radius;
-            puck.vx *= -1;
-          }
-        }
-        // Right Wall
-        if (puck.x + puck.radius > this.width) {
-          if (puck.y < g2 || puck.y > this.height - g2) {
-            hitGoalTeam = 2;
-          } else {
-            puck.x = this.width - puck.radius;
-            puck.vx *= -1;
-          }
-        }
-        // Top/Bottom Walls
-        if (puck.y - puck.radius < 0) {
-          puck.y = puck.radius;
-          puck.vy *= -1;
-        }
-        if (puck.y + puck.radius > this.height) {
-          puck.y = this.height - puck.radius;
-          puck.vy *= -1;
-        }
-      }
-
-      if (hitGoalTeam !== 0) {
-        const lastHit = puck.lastHitTeam;
-        this.pucks.splice(i, 1);
-        this.onGoalScored(hitGoalTeam, lastHit, puck.x, puck.y);
-      }
-    }
-
-    // Puck vs Pusher
-    for (const puck of this.pucks) {
-      for (const pusher of this.pushers) {
-        const preDx = puck.x - pusher.x;
-        const preDy = puck.y - pusher.y;
-        const preDist = Math.hypot(preDx, preDy);
-        const minDist = (pusher.radius || 0) + (puck.radius || 0);
-        const prePenetration = Math.max(0, minDist - preDist);
-
-        const oldVx = puck.vx;
-        const oldVy = puck.vy;
-        resolveCircleCollision(pusher, puck, 1.0);
-        if (puck.vx !== oldVx || puck.vy !== oldVy) {
-          // Collision happened!
-          puck.lastHitTeam = pusher.team;
-          // Do not reset possession timer or owner here — ownership/timer logic is handled in the possession-check
-        }
-
-        const postDx = puck.x - pusher.x;
-        const postDy = puck.y - pusher.y;
-        const postDist = Math.hypot(postDx, postDy);
-
-        if (postDist > 0 && (postDist < minDist + 1 || prePenetration > 0)) {
-          const nx = postDx / postDist;
-          const ny = postDy / postDist;
-          const effectivePenetration = Math.max(prePenetration, minDist - postDist);
-
-          // Use pre-collision relative approach speed along normal for consistent hit strength.
-          // oldVx/oldVy is the puck's velocity before resolveCircleCollision modified it.
-          const relApproach = Math.max(0, (pusher.vx - oldVx) * nx + (pusher.vy - oldVy) * ny);
-          const speedFactor = Math.min(1, relApproach / this.baseSpeed);
-
-          const repulse = this.baseSpeed * Settings.IMPACT_REPULSION_MULTIPLIER * speedFactor;
-
-          // Apply instantaneous velocity away from pusher
-          puck.vx += nx * repulse;
-          puck.vy += ny * repulse;
-
-          // Add swipe friction from the pusher so grazing hits shoot the puck forward
-          const tx = -ny;
-          const ty = nx;
-          const tangentDiff = (pusher.vx * tx + pusher.vy * ty) - (oldVx * tx + oldVy * ty);
-          puck.vx += tx * tangentDiff * 0.4 * speedFactor;
-          puck.vy += ty * tangentDiff * 0.4 * speedFactor;
-
-          // Small positional nudge to ensure separation
-          const nudge = effectivePenetration > 0 ? 0.5 : 0;
-          puck.x += nx * nudge;
-          puck.y += ny * nudge;
-        }
-      }
-    }
+    // 3. Physics: move pucks, bounce them off walls, pushers and each other.
+    // Sub-stepped so a fast puck cannot tunnel through anything in one frame.
+    this.stepPhysics(dt);
 
     // Possession check: timer increments whenever puck crosses a boundary
     for (const puck of this.pucks) {
@@ -615,23 +474,246 @@ export class Game {
       // Remember current position for next frame's boundary check
       puck.lastX = puck.x;
       puck.lastY = puck.y;
+
+    }
+  }
+
+  // Sub-stepped physics integration. Pucks travel at a constant speed; every
+  // sub-step advances them a little, sweeps the pushers along their path, then
+  // resolves puck/wall, puck/pusher and puck/puck collisions. Splitting the
+  // frame keeps per-step motion below a puck radius so nothing tunnels through.
+  stepPhysics(dt) {
+    const targetSpeed = this.baseSpeed * this.speedMultiplier;
+
+    // Normalize puck speeds, incorporating any active speed boost from momentum.
+    for (const puck of this.pucks) {
+      if (puck.speedBoost > 0) {
+        puck.speedBoost = Math.max(0, puck.speedBoost * Math.exp(-Settings.MOMENTUM_DECAY * dt));
+      }
+      this.setPuckSpeed(puck, targetSpeed + puck.speedBoost);
     }
 
-    // Puck vs Puck
-    for (let i = 0; i < this.pucks.length; i++) {
-      for (let j = i + 1; j < this.pucks.length; j++) {
-        const p1 = this.pucks[i];
-        const p2 = this.pucks[j];
-        const oldV1x = p1.vx;
-        resolveCircleCollision(p1, p2, 1.0);
-        if (p1.vx !== oldV1x) {
-          // Transfer ownership? Or just keep their own ownership
-          const temp = p1.lastHitTeam;
-          p1.lastHitTeam = p2.lastHitTeam || p1.lastHitTeam;
-          p2.lastHitTeam = temp || p2.lastHitTeam;
+    // Choose a sub-step count from the fastest mover (puck or pusher) so that
+    // no body advances more than half the smallest puck radius per sub-step.
+    let maxTravel = targetSpeed * dt;
+    let minRadius = this.puckRadius;
+    for (const puck of this.pucks) minRadius = Math.min(minRadius, puck.radius);
+    for (const pusher of this.pushers) {
+      maxTravel = Math.max(maxTravel, Math.hypot(pusher.finalX - pusher.prevX, pusher.finalY - pusher.prevY));
+    }
+    const safeStep = Math.max(1, minRadius * 0.5);
+    const steps = Math.max(1, Math.min(Settings.MAX_SUBSTEPS, Math.ceil(maxTravel / safeStep)));
+    const sdt = dt / steps;
+
+    for (let s = 0; s < steps; s++) {
+      const t = (s + 1) / steps;
+
+      // Sweep pushers from their start to their final position for this frame.
+      for (const pusher of this.pushers) {
+        pusher.x = pusher.prevX + (pusher.finalX - pusher.prevX) * t;
+        pusher.y = pusher.prevY + (pusher.finalY - pusher.prevY) * t;
+      }
+
+      // Advance pucks.
+      for (const puck of this.pucks) {
+        puck.x += puck.vx * sdt;
+        puck.y += puck.vy * sdt;
+      }
+
+      // Walls and goals. Collect goals and apply them after the collision pass.
+      const scored = [];
+      for (let i = this.pucks.length - 1; i >= 0; i--) {
+        const puck = this.pucks[i];
+        const goalResult = this.handlePuckWalls(puck);
+        if (goalResult !== 0) {
+          this.pucks.splice(i, 1);
+          scored.push({ goalTeam: goalResult.team, wall: goalResult.wall, lastHit: puck.lastHitTeam, x: puck.x, y: puck.y });
         }
       }
+
+      // Puck vs Pusher (pushers are immovable, so only the puck reacts).
+      for (const puck of this.pucks) {
+        for (const pusher of this.pushers) {
+          const hit = resolveCircleCollision(pusher, puck, 1.0);
+          if (hit) {
+            puck.lastHitTeam = pusher.team;
+            // Guarantee the puck peels off the pusher instead of orbiting its
+            // rim: a grazing hit produces almost no normal impulse, so force a
+            // minimum outward speed (measured relative to the moving pusher).
+            // This must run for EVERY contact (including ones the solver treats
+            // as "already separating"), otherwise the puck slides along the edge.
+            const dx = puck.x - pusher.x;
+            const dy = puck.y - pusher.y;
+            const d = Math.hypot(dx, dy) || 1;
+            const nx = dx / d;
+            const ny = dy / d;
+            const relOut = (puck.vx - pusher.vx) * nx + (puck.vy - pusher.vy) * ny;
+            const minOut = targetSpeed * Settings.PUSHER_MIN_DEFLECT;
+            if (relOut < minOut) {
+              const add = minOut - relOut;
+              puck.vx += nx * add;
+              puck.vy += ny * add;
+            }
+
+            if (Settings.BALL_MOMENTUM) {
+              const pusherNormal = pusher.vx * nx + pusher.vy * ny;
+              if (pusherNormal > 0) {
+                const boost = pusherNormal * Settings.MOMENTUM_TRANSFER;
+                const maxBoost = targetSpeed * Settings.MOMENTUM_MAX_BOOST_FACTOR;
+                puck.speedBoost = Math.min(maxBoost, puck.speedBoost + boost);
+              }
+            }
+          }
+        }
+      }
+
+      // Puck vs Puck.
+      for (let i = 0; i < this.pucks.length; i++) {
+        for (let j = i + 1; j < this.pucks.length; j++) {
+          const p1 = this.pucks[i];
+          const p2 = this.pucks[j];
+          if (resolveCircleCollision(p1, p2, 1.0)) {
+            const temp = p1.lastHitTeam;
+            p1.lastHitTeam = p2.lastHitTeam || p1.lastHitTeam;
+            p2.lastHitTeam = temp || p2.lastHitTeam;
+          }
+        }
+      }
+
+      // Final guarantee: a puck must never be left overlapping a pusher (a
+      // puck-vs-puck push above can shove one back in). Move it straight out
+      // along the contact normal so it sits flush against the pusher's edge.
+      for (const puck of this.pucks) {
+        for (const pusher of this.pushers) {
+          const dx = puck.x - pusher.x;
+          const dy = puck.y - pusher.y;
+          const minDist = pusher.radius + puck.radius;
+          const d = Math.hypot(dx, dy);
+          if (d < minDist) {
+            const nx = d > 1e-9 ? dx / d : 1;
+            const ny = d > 1e-9 ? dy / d : 0;
+            puck.x = pusher.x + nx * minDist;
+            puck.y = pusher.y + ny * minDist;
+          }
+        }
+      }
+
+      // Collisions only change direction — restore the constant puck speed.
+      for (const puck of this.pucks) this.setPuckSpeed(puck, targetSpeed);
+
+      for (const sc of scored) {
+        this.onGoalScored(sc.goalTeam, sc.lastHit, sc.x, sc.y, sc.wall);
+      }
     }
+
+    // Leave pushers at their final position for rendering and next frame.
+    for (const pusher of this.pushers) {
+      pusher.x = pusher.finalX;
+      pusher.y = pusher.finalY;
+    }
+  }
+
+  // Rescale a puck's velocity to the given speed, giving it a random heading
+  // if it has somehow come to rest.
+  setPuckSpeed(puck, speed) {
+    const sp = Math.hypot(puck.vx, puck.vy);
+    if (sp > 1e-6) {
+      puck.vx = (puck.vx / sp) * speed;
+      puck.vy = (puck.vy / sp) * speed;
+    } else {
+      const angle = Math.random() * Math.PI * 2;
+      puck.vx = Math.cos(angle) * speed;
+      puck.vy = Math.sin(angle) * speed;
+    }
+  }
+
+  // Reflect a puck off the arena walls, or return the team whose goal it
+  // entered (0 if it stays in play). Velocity is set to point away from the
+  // wall rather than simply negated, so a puck grazing the wall across several
+  // sub-steps can't get its velocity flipped twice and stick.
+  handlePuckWalls(puck) {
+    if (this.numPlayers === 3) {
+      const d = this.goalOffset;
+      const cx = this.width / 2;
+
+      // Left Wall — Team 1: one goal at y=d (adjacent to Team 3 boundary at top-left corner)
+      if (puck.x - puck.radius < 0) {
+        const g1 = this.goalSizes.team1;
+        if (puck.y > d - g1 / 2 && puck.y < d + g1 / 2) {
+          return { team: 1, wall: 'left' };
+        } else {
+          puck.x = puck.radius;
+          puck.vx = Math.abs(puck.vx);
+        }
+      }
+      // Right Wall — Team 2: one goal at y=d (adjacent to Team 3 boundary at top-right corner)
+      if (puck.x + puck.radius > this.width) {
+        const g2 = this.goalSizes.team2;
+        if (puck.y > d - g2 / 2 && puck.y < d + g2 / 2) {
+          return { team: 2, wall: 'right' };
+        } else {
+          puck.x = this.width - puck.radius;
+          puck.vx = -Math.abs(puck.vx);
+        }
+      }
+      // Top Wall — Team 3: two goals at x=d and x=width-d
+      if (puck.y - puck.radius < 0) {
+        const g3 = this.goalSizes.team3;
+        const inA = puck.x > d - g3 / 2 && puck.x < d + g3 / 2;
+        const inB = puck.x > (this.width - d) - g3 / 2 && puck.x < (this.width - d) + g3 / 2;
+        if (inA || inB) {
+          return { team: 3, wall: 'top' };
+        } else {
+          puck.y = puck.radius;
+          puck.vy = Math.abs(puck.vy);
+        }
+      }
+      // Bottom Wall — Team 1 goal at x=cx-d, Team 2 goal at x=cx+d (adjacent to Team 1/2 boundary at bottom-center)
+      if (puck.y + puck.radius > this.height) {
+        const g1 = this.goalSizes.team1;
+        const g2 = this.goalSizes.team2;
+        if (puck.x > (cx - d) - g1 / 2 && puck.x < (cx - d) + g1 / 2) {
+          return { team: 1, wall: 'bottom' };
+        } else if (puck.x > (cx + d) - g2 / 2 && puck.x < (cx + d) + g2 / 2) {
+          return { team: 2, wall: 'bottom' };
+        } else {
+          puck.y = this.height - puck.radius;
+          puck.vy = -Math.abs(puck.vy);
+        }
+      }
+    } else {
+      const g1 = this.goalSizes.team1;
+      const g2 = this.goalSizes.team2;
+      // Left Wall
+      if (puck.x - puck.radius < 0) {
+        if (puck.y < g1 || puck.y > this.height - g1) {
+          return { team: 1, wall: 'left' };
+        } else {
+          puck.x = puck.radius;
+          puck.vx = Math.abs(puck.vx);
+        }
+      }
+      // Right Wall
+      if (puck.x + puck.radius > this.width) {
+        if (puck.y < g2 || puck.y > this.height - g2) {
+          return { team: 2, wall: 'right' };
+        } else {
+          puck.x = this.width - puck.radius;
+          puck.vx = -Math.abs(puck.vx);
+        }
+      }
+      // Top/Bottom Walls
+      if (puck.y - puck.radius < 0) {
+        puck.y = puck.radius;
+        puck.vy = Math.abs(puck.vy);
+      }
+      if (puck.y + puck.radius > this.height) {
+        puck.y = this.height - puck.radius;
+        puck.vy = -Math.abs(puck.vy);
+      }
+    }
+
+    return 0;
   }
 
   getColor(team) {
@@ -642,6 +724,15 @@ export class Game {
   }
 
   draw(ctx) {
+    // When the physical canvas is portrait (height > width), rotate the drawing context
+    // -90° so the landscape game layout fills the screen with goals maximally separated.
+    const portrait = ctx.canvas.height > ctx.canvas.width;
+    if (portrait) {
+      ctx.save();
+      ctx.translate(0, ctx.canvas.height);
+      ctx.rotate(-Math.PI / 2);
+    }
+
     ctx.clearRect(0, 0, this.width, this.height);
 
     const cx = this.width / 2;
@@ -651,6 +742,7 @@ export class Game {
       const g1 = this.goalSizes.team1;
       const g2 = this.goalSizes.team2;
       const g3 = this.goalSizes.team3;
+      const d = this.goalOffset;
 
       // Draw radial backgrounds
       // Team 1 (Left)
@@ -691,42 +783,63 @@ export class Game {
       ctx.lineWidth = 5;
       ctx.stroke();
 
-      // Draw goal semicircles (D-zones in front of each goal)
+      // Draw D-zones and goals — two per team on different walls
       ctx.lineWidth = 2;
 
+      // Team 1: left wall goal at y=d (top, near Team3 boundary) + bottom wall goal at x=cx-d (near Team2 boundary)
       ctx.fillStyle = 'rgba(0, 255, 255, 0.12)';
       ctx.strokeStyle = 'rgba(0, 255, 255, 0.5)';
       ctx.beginPath();
-      ctx.ellipse(0, cy, this.goalDepth, g1 / 2, 0, -Math.PI / 2, Math.PI / 2);
+      ctx.ellipse(0, d, this.goalDepth, g1 / 2, 0, -Math.PI / 2, Math.PI / 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(cx - d, this.height, g1 / 2, this.goalDepth, 0, 0, Math.PI, true);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
 
+      // Team 2: right wall goal at y=d (top, near Team3 boundary) + bottom wall goal at x=cx+d (near Team2 boundary)
       ctx.fillStyle = 'rgba(255, 0, 255, 0.12)';
       ctx.strokeStyle = 'rgba(255, 0, 255, 0.5)';
       ctx.beginPath();
-      ctx.ellipse(this.width, cy, this.goalDepth, g2 / 2, 0, -Math.PI / 2, Math.PI / 2, true);
+      ctx.ellipse(this.width, d, this.goalDepth, g2 / 2, 0, -Math.PI / 2, Math.PI / 2, true);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(cx + d, this.height, g2 / 2, this.goalDepth, 0, 0, Math.PI, true);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
 
+      // Team 3 (top wall): goals at x=d and x=width-d (unchanged)
       ctx.fillStyle = 'rgba(255, 255, 0, 0.12)';
       ctx.strokeStyle = 'rgba(255, 255, 0, 0.5)';
       ctx.beginPath();
-      ctx.ellipse(cx, 0, g3 / 2, this.goalDepth, 0, 0, Math.PI);
+      ctx.ellipse(d, 0, g3 / 2, this.goalDepth, 0, 0, Math.PI);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(this.width - d, 0, g3 / 2, this.goalDepth, 0, 0, Math.PI);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
 
-      // Draw Goals
-      ctx.fillStyle = 'rgba(0, 255, 255, 0.3)'; // Team 1 Goal (Left Middle)
-      ctx.fillRect(0, cy - g1 / 2, 10, g1);
+      // Draw goal openings on the walls
+      ctx.fillStyle = 'rgba(0, 255, 255, 0.3)'; // Team 1
+      ctx.fillRect(0, d - g1 / 2, 10, g1);
+      ctx.fillRect(cx - d - g1 / 2, this.height - 10, g1, 10);
 
-      ctx.fillStyle = 'rgba(255, 0, 255, 0.3)'; // Team 2 Goal (Right Middle)
-      ctx.fillRect(this.width - 10, cy - g2 / 2, 10, g2);
+      ctx.fillStyle = 'rgba(255, 0, 255, 0.3)'; // Team 2
+      ctx.fillRect(this.width - 10, d - g2 / 2, 10, g2);
+      ctx.fillRect(cx + d - g2 / 2, this.height - 10, g2, 10);
 
-      ctx.fillStyle = 'rgba(255, 255, 0, 0.3)'; // Team 3 Goal (Top Middle)
-      ctx.fillRect(cx - g3 / 2, 0, g3, 10);
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.3)'; // Team 3
+      ctx.fillRect(d - g3 / 2, 0, g3, 10);
+      ctx.fillRect(this.width - d - g3 / 2, 0, g3, 10);
     } else {
       if (this.numPlayers === 4) {
         // Draw quadrant backgrounds for each player's area
@@ -809,7 +922,7 @@ export class Game {
       const alpha = t * 0.85;
 
       const ballColor = this.getColor(this.lastScoredByTeam || this.lastScoredGoalTeam);
-      const gTeam = this.lastScoredGoalTeam;
+      const gWall = this.lastScoredGoalWall;
       const entryY = this.lastScoredGoalY;
       const entryX = this.lastScoredGoalX;
       const half = this.lastScoredPuckRadius * 1.3;
@@ -826,24 +939,30 @@ export class Game {
       ctx.globalCompositeOperation = 'screen';
       ctx.beginPath();
 
-      if (gTeam === 1) {
+      if (gWall === 'left') {
         // Left wall — beam fans RIGHT from x=0
         ctx.moveTo(0, entryY - half);
         ctx.lineTo(L, entryY - half - L * spread);
         ctx.lineTo(L, entryY + half + L * spread);
         ctx.lineTo(0, entryY + half);
-      } else if (gTeam === 2) {
+      } else if (gWall === 'right') {
         // Right wall — beam fans LEFT from x=width
         ctx.moveTo(this.width, entryY - half);
         ctx.lineTo(this.width - L, entryY - half - L * spread);
         ctx.lineTo(this.width - L, entryY + half + L * spread);
         ctx.lineTo(this.width, entryY + half);
-      } else if (gTeam === 3) {
+      } else if (gWall === 'top') {
         // Top wall — beam fans DOWN from y=0
         ctx.moveTo(entryX - half, 0);
         ctx.lineTo(entryX - half - L * spread, L);
         ctx.lineTo(entryX + half + L * spread, L);
         ctx.lineTo(entryX + half, 0);
+      } else if (gWall === 'bottom') {
+        // Bottom wall — beam fans UP from y=height
+        ctx.moveTo(entryX - half, this.height);
+        ctx.lineTo(entryX - half - L * spread, this.height - L);
+        ctx.lineTo(entryX + half + L * spread, this.height - L);
+        ctx.lineTo(entryX + half, this.height);
       }
 
       ctx.closePath();
@@ -851,12 +970,14 @@ export class Game {
 
       const reach = Math.min(this.width, this.height) * 0.25;
       let grad;
-      if (gTeam === 1) {
+      if (gWall === 'left') {
         grad = ctx.createLinearGradient(0, entryY, reach, entryY);
-      } else if (gTeam === 2) {
+      } else if (gWall === 'right') {
         grad = ctx.createLinearGradient(this.width, entryY, this.width - reach, entryY);
-      } else if (gTeam === 3) {
+      } else if (gWall === 'top') {
         grad = ctx.createLinearGradient(entryX, 0, entryX, reach);
+      } else if (gWall === 'bottom') {
+        grad = ctx.createLinearGradient(entryX, this.height, entryX, this.height - reach);
       }
 
       if (grad) {
@@ -909,6 +1030,9 @@ export class Game {
       ctx.shadowBlur = 0;
 
       // Draw graphical split timers as arcs around the puck (no numbers)
+      // Skip timers once max pucks reached — they can't spawn more pucks
+      if (this.pucks.length >= this.maxPucks) continue;
+
       // Outer arc: puck-specific split progress
       const splitProgress = Math.min(1, (puck.timeSinceLastSplit || 0) / this.splitInterval);
       if (splitProgress > 0) {
@@ -934,6 +1058,8 @@ export class Game {
         ctx.stroke();
       }
     }
+
+    if (portrait) ctx.restore();
   }
 
   splitPuck(puck) {
@@ -973,7 +1099,8 @@ export class Game {
       possessionTimer: 0,
       timeSinceLastSplit: 0,
       lastX: puck.x + xOffset,
-      lastY: puck.y + yOffset
+      lastY: puck.y + yOffset,
+      speedBoost: 0,
     });
 
     // Slight position jitter so they don't overlap exactly

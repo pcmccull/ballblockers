@@ -22,10 +22,29 @@ export class InputManager {
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
   }
 
+  // Map a client pointer position to game-space coordinates, accounting for
+  // portrait mode where the game context is rotated -90° to landscape.
+  toGameCoords(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const px = clientX - rect.left;
+    const py = clientY - rect.top;
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    if (this.canvas.height > this.canvas.width) {
+      // Portrait: ctx is rotated -90°, so game_x = canvasH - cpy, game_y = cpx
+      return { x: this.canvas.height - py * scaleY, y: px * scaleX };
+    }
+    return { x: px * scaleX, y: py * scaleY };
+  }
+
+  // Game-space dimensions (always landscape: wider × shorter)
+  get gameWidth() { return Math.max(this.canvas.width, this.canvas.height); }
+  get gameHeight() { return Math.min(this.canvas.width, this.canvas.height); }
+
   getQuadrantIndex(x, y) {
     if (this.numPlayers === 3) {
-      const cx = this.canvas.width / 2;
-      const cy = this.canvas.height / 2;
+      const cx = this.gameWidth / 2;
+      const cy = this.gameHeight / 2;
       
       // Radial check
       // Line to bottom middle: x = cx, y > cy
@@ -38,8 +57,8 @@ export class InputManager {
         // Slope of TL diagonal is cy/cx. So line is y = cy/cx * x.
         // Above the line means y < cy/cx * x
         const tlLineY = (cy / cx) * x;
-        const trLineY = (cy / cx) * (this.canvas.width - x);
-        
+        const trLineY = (cy / cx) * (this.gameWidth - x);
+
         if (y < tlLineY && y < trLineY) return 0; // Top Zone
         if (x < cx) return 1; // Left Zone
         return 2; // Right Zone
@@ -50,8 +69,8 @@ export class InputManager {
       }
     }
 
-    const isRight = x > this.canvas.width / 2;
-    const isBottom = y > this.canvas.height / 2;
+    const isRight = x > this.gameWidth / 2;
+    const isBottom = y > this.gameHeight / 2;
     if (!isRight && !isBottom) return 0; // Top-Left
     if (!isRight && isBottom) return 1;  // Bottom-Left
     if (isRight && !isBottom) return 2;  // Top-Right
@@ -60,12 +79,9 @@ export class InputManager {
   }
 
   onPointerDown(e) {
-    const rect = this.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-
+    const { x, y } = this.toGameCoords(e.clientX, e.clientY);
     const qIndex = this.getQuadrantIndex(x, y);
-    
+
     this.pointers.set(e.pointerId, {
       x, y, startX: x, startY: y, isDown: true, quadrant: qIndex
     });
@@ -79,10 +95,9 @@ export class InputManager {
   onPointerMove(e) {
     if (!this.pointers.has(e.pointerId)) return;
     const ptr = this.pointers.get(e.pointerId);
-    
-    const rect = this.canvas.getBoundingClientRect();
-    ptr.x = e.clientX - rect.left;
-    ptr.y = e.clientY - rect.top;
+    const { x, y } = this.toGameCoords(e.clientX, e.clientY);
+    ptr.x = x;
+    ptr.y = y;
   }
 
   onPointerUp(e) {

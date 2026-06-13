@@ -1,56 +1,62 @@
-export function resolveCircleCollision(p1, p2, restitution = 1) {
-  const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
-  const distance = Math.sqrt(dx * dx + dy * dy);
-  const minDist = p1.radius + p2.radius;
+// Elastic collision + positional separation between two circles.
+// Each body needs { x, y, vx, vy, radius, mass }. A mass of Infinity is
+// treated as immovable (e.g. a pusher), so it neither moves nor changes velocity.
+// Returns false when the circles are not overlapping. Otherwise returns
+// { overlapped: true, impulse } where `impulse` is true only when an actual
+// velocity response was applied (the bodies were approaching), and false when
+// they were already separating and only positional separation happened.
+export function resolveCircleCollision(a, b, restitution = 1) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  let dist = Math.hypot(dx, dy);
+  const minDist = a.radius + b.radius;
 
-  if (distance < minDist && distance > 0) {
-    // Separation
-    const overlap = minDist - distance;
-    const nx = dx / distance;
-    const ny = dy / distance;
-    
-    // Separate them based on mass (if one is pusher, it might have infinite mass)
-    const m1 = p1.mass || 1;
-    const m2 = p2.mass || 1;
-    const sumMass = m1 + m2;
-    
-    // If mass is Infinity, weight is 0
-    const w1 = m1 === Infinity ? 0 : m2 / sumMass;
-    const w2 = m2 === Infinity ? 0 : m1 / sumMass;
-
-    if (m1 !== Infinity) {
-      p1.x -= nx * overlap * (m2 === Infinity ? 1 : w1);
-      p1.y -= ny * overlap * (m2 === Infinity ? 1 : w1);
-    }
-    if (m2 !== Infinity) {
-      p2.x += nx * overlap * (m1 === Infinity ? 1 : w2);
-      p2.y += ny * overlap * (m1 === Infinity ? 1 : w2);
-    }
-
-    // Velocity reflection
-    const dvx = p2.vx - p1.vx;
-    const dvy = p2.vy - p1.vy;
-    const velocityAlongNormal = dvx * nx + dvy * ny;
-
-    // Do not resolve if velocities are separating
-    if (velocityAlongNormal > 0) return;
-
-    const j = -(1 + restitution) * velocityAlongNormal;
-    const impulse = j / ((m1 === Infinity ? 0 : 1/m1) + (m2 === Infinity ? 0 : 1/m2));
-
-    const impulseX = impulse * nx;
-    const impulseY = impulse * ny;
-
-    if (m1 !== Infinity) {
-      p1.vx -= impulseX / m1;
-      p1.vy -= impulseY / m1;
-    }
-    if (m2 !== Infinity) {
-      p2.vx += impulseX / m2;
-      p2.vy += impulseY / m2;
-    }
+  if (dist >= minDist) return false;
+  
+  // Collision normal pointing from a to b. If the centers coincide, pick an
+  // arbitrary normal and treat the pair as fully overlapped.
+  let nx, ny;
+  if (dist > 1e-9) {
+    nx = dx / dist;
+    ny = dy / dist;
+  } else {
+    nx = 1;
+    ny = 0;
+    dist = 0;
   }
+  
+
+  const ma = a.mass ?? 1;
+  const mb = b.mass ?? 1;
+  const invA = ma === Infinity ? 0 : 1 / ma;
+  const invB = mb === Infinity ? 0 : 1 / mb;
+  const invSum = invA + invB;
+  if (invSum === 0) return { overlapped: true, impulse: false }; // two immovable bodies, nothing to do
+
+  // Positional separation: push the bodies apart so they no longer overlap,
+  // distributing the correction by inverse mass (immovable bodies stay put).
+  const overlap = minDist - dist;
+  a.x -= nx * overlap * (invA / invSum);
+  a.y -= ny * overlap * (invA / invSum);
+  b.x += nx * overlap * (invB / invSum);
+  b.y += ny * overlap * (invB / invSum);
+
+  // Velocity response: only resolve if the bodies are approaching.
+  const rvx = b.vx - a.vx;
+  const rvy = b.vy - a.vy;
+  const relNormal = rvx * nx + rvy * ny;
+  if (relNormal > 0) return { overlapped: true, impulse: false }; // already separating
+
+  const j = -(1 + restitution) * relNormal / invSum;
+  const ix = j * nx;
+  const iy = j * ny;
+
+  a.vx -= ix * invA;
+  a.vy -= iy * invA;
+  b.vx += ix * invB;
+  b.vy += iy * invB;
+
+  return { overlapped: true, impulse: true };
 }
 
 export function constrainPusher(pusher, minX, maxX, minY, maxY) {

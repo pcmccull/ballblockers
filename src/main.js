@@ -37,7 +37,8 @@ function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
   if (game) {
-    game.onResize(canvas.width, canvas.height);
+    // Always pass landscape (wider) dimensions to the game
+    game.onResize(Math.max(canvas.width, canvas.height), Math.min(canvas.width, canvas.height));
   }
 }
 
@@ -76,7 +77,10 @@ function startGame(numPlayers, difficulty = 'hard') {
   }
 
   inputManager = new InputManager(canvas, numPlayers);
-  game = new Game(canvas.width, canvas.height, numPlayers, inputManager, onGameOver, difficulty);
+  // Always use landscape (wider × shorter) dimensions so goals are maximally separated
+  const gameW = Math.max(canvas.width, canvas.height);
+  const gameH = Math.min(canvas.width, canvas.height);
+  game = new Game(gameW, gameH, numPlayers, inputManager, onGameOver, difficulty);
   
   isRunning = true;
   lastTime = performance.now();

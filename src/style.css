@@ -40,30 +40,68 @@ html {
 }
 
 #score-board {
-  display: flex;
-  justify-content: space-between;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
-  padding: clamp(10px, 3vh, 20px) clamp(20px, 5vw, 50px);
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
   font-size: clamp(1.8rem, 6vw, 3rem);
   font-family: 'Orbitron', sans-serif;
   font-weight: bold;
-  pointer-events: none;
-  z-index: 5;
 }
 
 #score-team1 {
+  --score-translate: translateY(-50%);
   color: #00ffff;
   text-shadow: 0 0 10px #00ffff;
+  position: absolute;
+  left: clamp(10px, 3vw, 24px);
+  top: 50%;
+  transform: var(--score-translate);
 }
 
 #score-team2 {
+  --score-translate: translateY(-50%);
   color: #ff00ff;
   text-shadow: 0 0 10px #ff00ff;
+  position: absolute;
+  right: clamp(10px, 3vw, 24px);
+  top: 50%;
+  transform: var(--score-translate);
 }
 
 #score-team3 {
+  --score-translate: translateX(-50%);
   color: #ffff00;
   text-shadow: 0 0 10px #ffff00;
+  position: absolute;
+  top: clamp(10px, 3vh, 20px);
+  left: 50%;
+  transform: var(--score-translate);
+}
+
+@media (orientation: portrait) {
+  #score-team1 {
+    --score-translate: translateX(-50%);
+    left: 50%;
+    top: auto;
+    bottom: clamp(10px, 3vh, 24px);
+  }
+
+  #score-team2 {
+    --score-translate: translateX(-50%);
+    right: auto;
+    left: 50%;
+    top: clamp(10px, 3vh, 24px);
+  }
+
+  #score-team3 {
+    --score-translate: translateY(-50%);
+    top: 50%;
+    left: clamp(10px, 3vw, 24px);
+  }
 }
 
 .overlay {
@@ -349,9 +387,9 @@ button:active {
 }
 
 @keyframes scoreHighlight {
-  0% { transform: scale(1); opacity: 0.5; filter: brightness(1); }
-  20% { transform: scale(1.6); opacity: 1; filter: brightness(1.5); }
-  100% { transform: scale(1); opacity: 0.5; filter: brightness(1); }
+  0% { transform: var(--score-translate, none) scale(1); opacity: 0.5; filter: brightness(1); }
+  20% { transform: var(--score-translate, none) scale(1.6); opacity: 1; filter: brightness(1.5); }
+  100% { transform: var(--score-translate, none) scale(1); opacity: 0.5; filter: brightness(1); }
 }
 
 .score-highlight {
