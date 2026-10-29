@@ -211,6 +211,7 @@ class PixelDropTitle {
 
     const overlayRect = this.overlay.getBoundingClientRect();
     const rect = this.heading.getBoundingClientRect();
+    this.layoutTop = rect.top;
     const centerX = rect.left - overlayRect.left + rect.width / 2;
     const centerY = rect.top - overlayRect.top + rect.height / 2;
 
@@ -421,6 +422,18 @@ export function initPixelDropTitles() {
     }).observe(t.heading, { childList: true, characterData: true, subtree: true });
 
     if (wasActive) playWhenReady(t);
+
+    // Content appearing after the title is laid out (e.g. the Install App
+    // button, which only shows once the browser fires beforeinstallprompt)
+    // re-centres the overlay and moves the heading, so follow it.
+    const followHeading = () => {
+      if (!isActive(t) || !t.blocks.length) return;
+      if (t.heading.getBoundingClientRect().top === t.layoutTop) return;
+      if (t.rafId !== null) t.layout(); // mid-drop: retarget, keep animating
+      else t.snapToFinal();
+    };
+    const observer = new ResizeObserver(followHeading);
+    for (const child of t.overlay.children) observer.observe(child);
   }
 
   let resizeTimer;
