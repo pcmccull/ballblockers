@@ -1,5 +1,7 @@
 import { Game } from './Game.js';
 import { InputManager } from './Input.js';
+import { initPixelDropTitles, initPixelScores, TeamIntro } from './PixelDropText.js';
+import { initInstallPrompt, isInstalledApp, registerServiceWorker } from './pwa/install.js';
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -25,13 +27,61 @@ const btnHard = document.getElementById('btn-hard');
 const uiPauseScreen = document.getElementById('pause-screen');
 const btnResume = document.getElementById('btn-resume');
 const btnMainMenu = document.getElementById('btn-main-menu');
+const btnWinMainMenu = document.getElementById('btn-win-main-menu');
 
 let game;
 let inputManager;
 let lastTime = 0;
 let isRunning = false;
+let intro = null; // team-name animation that plays before the game starts
 let lastNumPlayers = 2;
 let lastDifficulty = 'hard';
+
+const USEFUL_TIPS = [
+  'Stop moving to refill your stamina',
+  'Get those power-ups to win!',
+  'A tired pusher is a slow pusher',
+  'Yellow power-ups give you a burst of speed',
+  'Green power-ups let you cross into enemy territory',
+  'Watch out, the pucks keep splitting!',
+  'Rest early, so you have stamina when it counts',
+  'Block with your pusher, not just your goal',
+];
+const FUNNY_TIPS = [
+  'The puck is not your friend',
+  "Pucks split when they're nervous. They're always nervous.",
+  'Seven pucks is not "a lot." Twelve pucks is "a lot."',
+  "Your goal is the hole you're supposed to protect, not decorate",
+  'Blame lag. There is no lag.',
+  'Stop moving to refill your stamina. Works in real life too.',
+  'Panic wiggling burns stamina and dignity at the same rate',
+  'Resting is a strategy, not giving up',
+  'Power-ups are free. Losing is also free.',
+  'The green power-up lets you visit your enemy. Bring snacks.',
+  'Yellow means go fast, not go away',
+  "The AI on Hard doesn't sleep. Or blink. Or forgive.",
+  'Easy mode is not a personal insult. Mostly.',
+  "If you're losing to your little brother, that's a skill issue",
+  'Elbowing your teammate is not an official move',
+  'Friendship ends at 6-6',
+  'Read the tips',
+  'This tip intentionally left blank',
+  'Tips do not improve your aim',
+];
+const ALL_TIPS = [...USEFUL_TIPS, ...FUNNY_TIPS];
+const tipEls = document.querySelectorAll('.overlay .tip');
+let lastTip = null;
+
+// Pick a fresh tip (never the same twice in a row) for every menu screen.
+// The very first one is always a useful tip; after that funny ones mix in.
+function refreshTip() {
+  const pool = lastTip === null ? USEFUL_TIPS : ALL_TIPS;
+  let tip;
+  do { tip = pool[Math.floor(Math.random() * pool.length)]; } while (tip === lastTip);
+  lastTip = tip;
+  tipEls.forEach(el => { el.textContent = `TIP: ${tip}`; });
+}
+refreshTip();
 
 function resizeCanvas() {
   canvas.width = window.innerWidth;
@@ -39,6 +89,10 @@ function resizeCanvas() {
   if (game) {
     // Always pass landscape (wider) dimensions to the game
     game.onResize(Math.max(canvas.width, canvas.height), Math.min(canvas.width, canvas.height));
+    if (intro) {
+      intro = null; // its block positions no longer match the screen
+      game.pusherAppear = 0;
+    }
   }
 }
 
@@ -47,7 +101,8 @@ resizeCanvas(); // Initial setup
 
 function requestMobileFullscreen() {
   const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-  if (!isMobile) return;
+  // The installed app already launches full screen in landscape
+  if (!isMobile || isInstalledApp()) return;
   const el = document.documentElement;
   const requestFS = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
   if (!requestFS) return;
@@ -61,6 +116,7 @@ function requestMobileFullscreen() {
 function showDifficultyScreen() {
   uiStartScreen.classList.remove('active');
   uiDifficultyScreen.classList.add('active');
+  refreshTip();
 }
 
 function startGame(numPlayers, difficulty = 'hard') {
@@ -81,6 +137,8 @@ function startGame(numPlayers, difficulty = 'hard') {
   const gameW = Math.max(canvas.width, canvas.height);
   const gameH = Math.min(canvas.width, canvas.height);
   game = new Game(gameW, gameH, numPlayers, inputManager, onGameOver, difficulty);
+  intro = new TeamIntro(game.teamZonesOnScreen(canvas.width, canvas.height));
+  game.pusherAppear = -1; // hidden until the team names have cleared
   
   isRunning = true;
   lastTime = performance.now();
@@ -91,6 +149,7 @@ function onGameOver(winningTeam) {
   isRunning = false;
   inputManager.cleanup();
   uiWinScreen.classList.add('active');
+  refreshTip();
   winText.innerText = `Team ${winningTeam} Wins!`;
   let color = '#00ffff';
   if (winningTeam === 2) color = '#ff00ff';
@@ -99,25 +158,16 @@ function onGameOver(winningTeam) {
   winText.style.textShadow = `0 0 10px ${color}`;
 }
 
-function highlightScore(element) {
-  element.classList.remove('score-highlight');
-  void element.offsetWidth; // trigger reflow
-  element.classList.add('score-highlight');
-}
-
 function updateUI() {
   if (!game) return;
   if (scoreTeam1.innerText !== game.score.team1.toString()) {
     scoreTeam1.innerText = game.score.team1;
-    highlightScore(scoreTeam1);
   }
   if (scoreTeam2.innerText !== game.score.team2.toString()) {
     scoreTeam2.innerText = game.score.team2;
-    highlightScore(scoreTeam2);
   }
   if (game.numPlayers === 3 && scoreTeam3.innerText !== game.score.team3.toString()) {
     scoreTeam3.innerText = game.score.team3;
-    highlightScore(scoreTeam3);
   }
 }
 
@@ -130,8 +180,23 @@ function gameLoop(timestamp) {
   // Max dt to prevent physics explosions if tab is inactive
   const safeDt = Math.min(dt, 0.05);
 
-  game.update(safeDt);
-  game.draw(ctx);
+  // Opening sequence: the board is frozen while the team names build and
+  // blast away, then the pushers pop in, then play starts
+  if (intro) {
+    intro.update(safeDt);
+    game.draw(ctx);
+    intro.draw(ctx);
+    if (intro.done) {
+      intro = null;
+      game.pusherAppear = 0;
+    }
+  } else if (game.pusherAppear !== null) {
+    game.advancePusherAppear(safeDt);
+    game.draw(ctx);
+  } else {
+    game.update(safeDt);
+    game.draw(ctx);
+  }
   updateUI();
 
   requestAnimationFrame(gameLoop);
@@ -140,6 +205,7 @@ function gameLoop(timestamp) {
 function pauseGame() {
   isRunning = false;
   uiPauseScreen.classList.add('active');
+  refreshTip();
 }
 
 function resumeGame() {
@@ -157,10 +223,12 @@ function returnToMainMenu() {
     inputManager = null;
   }
   game = null;
+  intro = null;
   uiPauseScreen.classList.remove('active');
   uiWinScreen.classList.remove('active');
   uiDifficultyScreen.classList.remove('active');
   uiStartScreen.classList.add('active');
+  refreshTip();
 }
 
 // Pause when the user swipes/taps out of fullscreen mid-game
@@ -186,3 +254,9 @@ btnHard.addEventListener('click', () => startGame(1, 'hard'));
 btnRestart.addEventListener('click', () => startGame(lastNumPlayers, lastDifficulty));
 btnResume.addEventListener('click', resumeGame);
 btnMainMenu.addEventListener('click', returnToMainMenu);
+btnWinMainMenu.addEventListener('click', returnToMainMenu);
+
+initPixelDropTitles();
+initPixelScores();
+initInstallPrompt();
+registerServiceWorker();

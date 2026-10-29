@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>BallBlockers</title>
+    <meta name="description" content="Single-screen multiplayer neon air hockey where the pucks keep splitting." />
+    <meta name="theme-color" content="#0c0a0a" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png" />
+    <!-- iOS: launch from the home screen with no browser UI -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="BallBlockers" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
@@ -18,34 +28,64 @@
           <div class="team-score" id="score-team2">0</div>
         </div>
         <div id="start-screen" class="overlay active">
-          <h1>BallBlockers</h1>
-          <p>First to 10 wins!</p>
+          <h1 data-pixel-drop>BallBlockers</h1>
+          <p>First to 7 wins!</p>
           <div class="button-container">
             <button id="btn-1player">1 Player</button>
             <button id="btn-2player">2 Players</button>
             <button id="btn-3player">3 Players</button>
             <button id="btn-4player">4 Players</button>
           </div>
+          <button id="btn-install" hidden>Install App</button>
+          <button id="btn-ios-install" hidden>Play Fullscreen</button>
+          <p class="tip"></p>
+        </div>
+        <div id="ios-install-screen" class="overlay" role="dialog" aria-modal="true" aria-labelledby="ios-install-title">
+          <h2 id="ios-install-title">Play Fullscreen</h2>
+          <p class="ios-install-intro">Add BallBlockers to your Home Screen to play without the browser bars.</p>
+          <ol class="ios-install-steps">
+            <li>
+              <span class="step-num">1</span>
+              <span>Tap the <strong>Share</strong> button
+                <svg class="share-icon" viewBox="0 0 24 24" aria-label="Share icon"><path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M8 11H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                in Safari's toolbar</span>
+            </li>
+            <li>
+              <span class="step-num">2</span>
+              <span>Scroll down and tap <strong>Add to Home Screen</strong></span>
+            </li>
+            <li>
+              <span class="step-num">3</span>
+              <span>Tap <strong>Add</strong>, then open BallBlockers from your Home Screen</span>
+            </li>
+          </ol>
+          <button id="btn-ios-install-close">Got It</button>
         </div>
         <div id="difficulty-screen" class="overlay">
-          <h1>Difficulty</h1>
+          <h1 data-pixel-drop>Difficulty</h1>
           <p>Choose your challenge</p>
           <div class="button-container">
             <button id="btn-easy">Easy</button>
             <button id="btn-medium">Medium</button>
             <button id="btn-hard">Hard</button>
           </div>
+          <p class="tip"></p>
         </div>
         <div id="win-screen" class="overlay">
-          <h1 id="win-text">Team 1 Wins!</h1>
-          <button id="btn-restart">Play Again</button>
+          <h1 id="win-text" data-pixel-drop>Team 1 Wins!</h1>
+          <div class="button-container">
+            <button id="btn-restart">Play Again</button>
+            <button id="btn-win-main-menu" class="btn-main-menu">Main Menu</button>
+          </div>
+          <p class="tip"></p>
         </div>
         <div id="pause-screen" class="overlay">
-          <h1>Paused</h1>
+          <h1 data-pixel-drop>Paused</h1>
           <div class="button-container">
             <button id="btn-resume">Resume</button>
-            <button id="btn-main-menu">Main Menu</button>
+            <button id="btn-main-menu" class="btn-main-menu">Main Menu</button>
           </div>
+          <p class="tip"></p>
         </div>
       </div>
       <canvas id="game-canvas"></canvas>

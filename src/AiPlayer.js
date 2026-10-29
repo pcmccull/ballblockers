@@ -1,27 +1,40 @@
+import * as Settings from './settings.js';
+
 // AI difficulty presets — each rule can be toggled independently
 export const AI_DIFFICULTY = {
   easy: {
-    speedFactor: 0.9,          // multiplier on baseSpeed * speedMultiplier
+    sprintFactor: 1.2,         // speed when hurrying, as a multiple of baseSpeed * speedMultiplier;
+                               // still limited by the same stamina cap as human pushers
     getsBehindPuck: false,     // reposition behind puck before striking
     aimsShots: false,          // calculate aimed shots toward opponent's goal
     tracksOpponentSide: false, // anticipate by mirroring puck clusters on opponent's side
     chasesOwnSide: true,       // chase pucks already on AI's side
+    collectsPowerUps: false,   // leave the goal to grab speed drops when no puck is incoming
   },
   medium: {
-    speedFactor: 1.3,
+    sprintFactor: 2.0,
     getsBehindPuck: true,
     aimsShots: false,
     tracksOpponentSide: true,
     chasesOwnSide: true,
+    collectsPowerUps: true,
   },
   hard: {
-    speedFactor: 1.5,
+    sprintFactor: 2.6,
     getsBehindPuck: true,
     aimsShots: true,
     tracksOpponentSide: true,
     chasesOwnSide: true,
+    collectsPowerUps: true,
   },
 };
+
+// How much faster the AI moves while it holds a speed boost
+const AI_BOOST_SPEED_FACTOR = 2;
+
+// Speed when repositioning without urgency, as a multiple of baseSpeed * speedMultiplier.
+// Slow enough to be cheap, but it still drains stamina like any movement.
+const AI_CRUISE_FACTOR = 0.95;
 
 export class AIController {
   constructor(rules = AI_DIFFICULTY.hard) {
@@ -29,10 +42,26 @@ export class AIController {
   }
 
   update(pusher, pucks, gameState, dt) {
-    const { width, height, goalSizes, baseSpeed, speedMultiplier } = gameState;
-    const { targetX, targetY } = this._computeTarget(pusher, pucks, width, height, goalSizes);
+    const { width, height, goalSizes, baseSpeed, speedMultiplier, maxSpeed, powerUp } = gameState;
+    const { targetX, targetY, urgent } = this._computeTarget(pusher, pucks, width, height, goalSizes, powerUp);
 
-    const aiSpeed = baseSpeed * this.rules.speedFactor * speedMultiplier;
+    // Like a human, the AI sprints only when it has to (a puck to play or a drop
+    // to grab) and otherwise repositions at a slow cruising speed. All movement
+    // costs stamina, so it only recovers once it settles at its target. Either
+    // way it is held to the same stamina-dependent cap as human pushers.
+    const unit = baseSpeed * speedMultiplier;
+    const boost = pusher.boostTimer > 0 ? AI_BOOST_SPEED_FACTOR : 1;
+    const desired = urgent
+      ? this.rules.sprintFactor * boost
+      : Math.min(this.rules.sprintFactor, AI_CRUISE_FACTOR);
+    // Tire like a human: every speed shrinks by the same fraction the human top
+    // speed does as stamina runs out, so an exhausted AI is visibly slower even
+    // when its chosen speed is already under the stamina cap.
+    const fatigue = pusher.boostTimer > 0 ? 1 :
+      (Settings.PUSHER_EXHAUSTED_SPEED_FACTOR +
+        (Settings.PUSHER_MAX_SPEED_FACTOR - Settings.PUSHER_EXHAUSTED_SPEED_FACTOR) * pusher.stamina) /
+      Settings.PUSHER_MAX_SPEED_FACTOR;
+    const aiSpeed = Math.min(unit * desired * fatigue, maxSpeed);
     const dx = targetX - pusher.x;
     const dy = targetY - pusher.y;
     const dist = Math.hypot(dx, dy);
@@ -49,7 +78,7 @@ export class AIController {
     }
   }
 
-  _computeTarget(pusher, pucks, width, height, goalSizes) {
+  _computeTarget(pusher, pucks, width, height, goalSizes, powerUp) {
     const defaultX = width - (goalSizes.team2 || height * 0.2);
     const defaultY = height / 2;
 
@@ -64,7 +93,12 @@ export class AIController {
     }
 
     if (closestIncoming) {
-      return this._targetForPuck(pusher, closestIncoming, width, height, goalSizes, defaultX - pusher.radius);
+      return { ...this._targetForPuck(pusher, closestIncoming, width, height, goalSizes, defaultX - pusher.radius), urgent: true };
+    }
+
+    // Priority 1b: nothing incoming, so it's safe to leave the goal for a speed drop
+    if (powerUp && this.rules.collectsPowerUps) {
+      return { targetX: powerUp.x, targetY: powerUp.y, urgent: true };
     }
 
     // Priority 2: any puck already on AI's side
@@ -78,7 +112,7 @@ export class AIController {
         }
       }
       if (closestOnSide) {
-        return this._targetForPuck(pusher, closestOnSide, width, height, goalSizes, closestOnSide.x - pusher.radius);
+        return { ...this._targetForPuck(pusher, closestOnSide, width, height, goalSizes, closestOnSide.x - pusher.radius), urgent: true };
       }
     }
 

@@ -44,7 +44,7 @@ export class InputManager {
   getQuadrantIndex(x, y) {
     if (this.numPlayers === 3) {
       const cx = this.gameWidth / 2;
-      const cy = this.gameHeight / 2;
+      const cy = this.gameHeight * 0.62; // must match THREE_PLAYER_SPLIT_Y_FRACTION in settings.js
       
       // Radial check
       // Line to bottom middle: x = cx, y > cy
