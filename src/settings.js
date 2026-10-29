@@ -1,6 +1,11 @@
 export const WINNING_SCORE = 7;
 export const BASE_SPEED = 300;
 export const REFERENCE_SIZE = 900; // px — screen size at which BASE_SPEED was tuned
+// Pusher speed shrinks less than the board on screens smaller than
+// REFERENCE_SIZE: it scales by (size / REFERENCE_SIZE) ^ this exponent, where
+// 1 shrinks it with the board and 0 keeps the desktop pixel speed. Thumbs cover
+// a small phone board quickly, so a pusher shrunk all the way feels sluggish.
+export const PUSHER_SMALL_SCREEN_SPEED_EXPONENT = 0.5;
 export const MAX_SPEED = 10;
 export const MAX_PUCKS = 10;
 export const SPLIT_INTERVAL = 20;
@@ -48,19 +53,20 @@ export const MOMENTUM_MAX_BOOST_FACTOR = 1.5;
 // Speeds are multiples of baseSpeed * speedMultiplier (i.e. relative to puck speed).
 // PUSHER_MAX_SPEED_FACTOR       — top speed with a full stamina bar.
 // PUSHER_EXHAUSTED_SPEED_FACTOR — top speed with an empty stamina bar.
-// STAMINA_DRAIN_RATE            — stamina lost per second when moving at full top speed
-//                                 (scales linearly with speed, so any movement costs something).
+// STAMINA_TRAVEL_FRACTION       — distance a full stamina bar covers, as a fraction of the
+//                                 board's length along the center line (its height, with goals
+//                                 left and right). Drain is per distance moved, so this holds
+//                                 at any speed or screen size.
 // STAMINA_REGEN_RATE            — stamina regained per second while standing still.
 // STAMINA_REGEN_DELAY           — seconds after the last drain before regen starts.
 // Stamina runs from 0 (empty) to 1 (full).
-export const PUSHER_MAX_SPEED_FACTOR = 3.0;
-export const PUSHER_EXHAUSTED_SPEED_FACTOR = 1.2;
-export const STAMINA_DRAIN_RATE = 0.9;
+export const PUSHER_MAX_SPEED_FACTOR = 5.0;
+export const PUSHER_EXHAUSTED_SPEED_FACTOR = 2.0;
+export const STAMINA_TRAVEL_FRACTION = 0.8;
 export const STAMINA_REGEN_RATE = 0.4;
 export const STAMINA_REGEN_DELAY = 0.4;
-// 3-player games use a much smaller stamina tank: each pusher guards two
-// borders, so constant fast swiping should run it dry almost immediately.
-export const THREE_PLAYER_STAMINA_DRAIN_RATE = 3.0;
+// 3-player games refill more slowly: each pusher guards two borders, so
+// constant swiping should leave it tired.
 export const THREE_PLAYER_STAMINA_REGEN_RATE = 0.25;
 
 // Speed power-up: a drop appears at a random spot on the center line between

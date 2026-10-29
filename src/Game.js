@@ -111,7 +111,9 @@ export class Game {
     this.winningScore = Settings.WINNING_SCORE;
 
     // Difficulty scaling — speed scales with screen size so crossing time stays consistent across devices
-    this.baseSpeed = Settings.BASE_SPEED * (Math.min(width, height) / Settings.REFERENCE_SIZE);
+    this.sizeScale = Math.min(width, height) / Settings.REFERENCE_SIZE;
+    this.baseSpeed = Settings.BASE_SPEED * this.sizeScale;
+    this.pusherBaseSpeed = this.computePusherBaseSpeed();
     this.speedMultiplier = 1.0;
     this.maxSpeed = Settings.MAX_SPEED;
     this.pusherRadius = Math.min(width, height) * Settings.PUSHER_RADIUS_FRACTION;
@@ -147,6 +149,18 @@ export class Game {
     this.width = width;
     this.height = height;
     this.goalOffset = Math.min(width, height) * 0.25;
+    this.sizeScale = Math.min(width, height) / Settings.REFERENCE_SIZE;
+    this.baseSpeed = Settings.BASE_SPEED * this.sizeScale;
+    this.pusherBaseSpeed = this.computePusherBaseSpeed();
+  }
+
+  // Pusher speed unit (pusher speeds are multiples of this × speedMultiplier).
+  // Matches baseSpeed on large screens but shrinks more slowly on small ones.
+  computePusherBaseSpeed() {
+    const scale = this.sizeScale < 1
+      ? this.sizeScale ** Settings.PUSHER_SMALL_SCREEN_SPEED_EXPONENT
+      : this.sizeScale;
+    return Settings.BASE_SPEED * scale;
   }
 
   initPlayers() {
@@ -183,7 +197,7 @@ export class Game {
   // Current top speed for a pusher, interpolated between the exhausted and
   // full-stamina caps (or the power-up speed while boosted).
   pusherSpeedCap(pusher) {
-    const unit = this.baseSpeed * this.speedMultiplier;
+    const unit = this.pusherBaseSpeed * this.speedMultiplier;
     if (pusher.boostTimer > 0) return unit * Settings.POWERUP_SPEED_FACTOR;
     const factor = Settings.PUSHER_EXHAUSTED_SPEED_FACTOR +
       (Settings.PUSHER_MAX_SPEED_FACTOR - Settings.PUSHER_EXHAUSTED_SPEED_FACTOR) * pusher.stamina;
@@ -269,7 +283,7 @@ export class Game {
     }
   }
 
-  // Drain stamina in proportion to how fast the pusher actually moved this
+  // Drain stamina in proportion to how far the pusher actually moved this
   // frame (after constraints), and regenerate it only while standing still.
   updateStamina(pusher, dt) {
     if (dt <= 0) return;
@@ -281,17 +295,17 @@ export class Game {
       return;
     }
     if (pusher.crossTimer > 0) return; // crossing the line freezes stamina where it was
-    const unit = this.baseSpeed * this.speedMultiplier;
-    const speed = Math.hypot(pusher.x - pusher.prevX, pusher.y - pusher.prevY) / dt;
-    const maxSpeed = unit * Settings.PUSHER_MAX_SPEED_FACTOR;
+    const unit = this.pusherBaseSpeed * this.speedMultiplier;
+    // Count no more than top speed allows, so being shoved by a collision
+    // doesn't cost extra
+    const maxStep = unit * Settings.PUSHER_MAX_SPEED_FACTOR * dt;
+    const moved = Math.min(maxStep, Math.hypot(pusher.x - pusher.prevX, pusher.y - pusher.prevY));
+    const fullTankDistance = this.height * Settings.STAMINA_TRAVEL_FRACTION;
 
-    const threePlayer = this.numPlayers === 3;
-    const drainRate = threePlayer ? Settings.THREE_PLAYER_STAMINA_DRAIN_RATE : Settings.STAMINA_DRAIN_RATE;
-    const regenRate = threePlayer ? Settings.THREE_PLAYER_STAMINA_REGEN_RATE : Settings.STAMINA_REGEN_RATE;
+    const regenRate = this.numPlayers === 3 ? Settings.THREE_PLAYER_STAMINA_REGEN_RATE : Settings.STAMINA_REGEN_RATE;
 
-    if (speed > 0) {
-      const effort = Math.min(1, speed / maxSpeed);
-      pusher.stamina = Math.max(0, pusher.stamina - effort * drainRate * dt);
+    if (moved > 0) {
+      pusher.stamina = Math.max(0, pusher.stamina - moved / fullTankDistance);
       pusher.staminaRegenDelay = Settings.STAMINA_REGEN_DELAY;
     } else if (pusher.staminaRegenDelay > 0) {
       pusher.staminaRegenDelay -= dt;
@@ -623,7 +637,7 @@ export class Game {
           width: this.width,
           height: this.height,
           goalSizes: this.goalSizes,
-          baseSpeed: this.baseSpeed,
+          baseSpeed: this.pusherBaseSpeed,
           speedMultiplier: this.speedMultiplier,
           maxSpeed: this.pusherSpeedCap(pusher),
           powerUp: this.powerUp ? this.getPowerUpGeometry() : null,
@@ -645,9 +659,12 @@ export class Game {
           const dx = targetX - pusher.x;
           const dy = targetY - pusher.y;
 
-          // Tunable constants (pixels/s^2 and damping)
-          const stiffness = Math.max(400, this.baseSpeed * 4 * this.speedMultiplier); // spring constant
-          const damping = Math.max(18, this.baseSpeed * 0.12 * this.speedMultiplier); // damping coefficient
+          // Tunable constants (1/s^2 and 1/s). These act on distances, so they
+          // use the unscaled speed: scaling them with screen size would make
+          // the pusher lag behind the finger on small screens.
+          const refSpeed = Settings.BASE_SPEED * this.speedMultiplier;
+          const stiffness = Math.max(400, refSpeed * 4); // spring constant
+          const damping = Math.max(18, refSpeed * 0.12); // damping coefficient
 
           // Spring force toward target minus damping proportional to velocity
           const ax = dx * stiffness - pusher.vx * damping;
@@ -671,7 +688,7 @@ export class Game {
 
           // Snap if extremely close and nearly stationary to avoid jitter
           const remaining = Math.hypot(targetX - pusher.x, targetY - pusher.y);
-          if (remaining <= 3 && Math.hypot(pusher.vx, pusher.vy) < 30) {
+          if (remaining <= 3 * this.sizeScale && Math.hypot(pusher.vx, pusher.vy) < 30 * this.sizeScale) {
             pusher.x = targetX;
             pusher.y = targetY;
             pusher.vx = 0;
@@ -679,14 +696,14 @@ export class Game {
           }
         } else {
           // No touch: apply damping to slowly come to rest (natural friction)
-          const stopDamping = Math.max(6, this.baseSpeed * 0.08 * this.speedMultiplier);
+          const stopDamping = Math.max(6, Settings.BASE_SPEED * 0.08 * this.speedMultiplier);
           pusher.vx -= pusher.vx * Math.min(1, stopDamping * dt);
           pusher.vy -= pusher.vy * Math.min(1, stopDamping * dt);
           pusher.x += pusher.vx * dt;
           pusher.y += pusher.vy * dt;
 
           // Small threshold to zero out
-          if (Math.hypot(pusher.vx, pusher.vy) < 4) {
+          if (Math.hypot(pusher.vx, pusher.vy) < 4 * this.sizeScale) {
             pusher.vx = 0;
             pusher.vy = 0;
           }
