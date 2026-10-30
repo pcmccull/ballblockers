@@ -199,9 +199,11 @@ export class Game {
   pusherSpeedCap(pusher) {
     const unit = this.pusherBaseSpeed * this.speedMultiplier;
     if (pusher.boostTimer > 0) return unit * Settings.POWERUP_SPEED_FACTOR;
-    const factor = Settings.PUSHER_EXHAUSTED_SPEED_FACTOR +
-      (Settings.PUSHER_MAX_SPEED_FACTOR - Settings.PUSHER_EXHAUSTED_SPEED_FACTOR) * pusher.stamina;
-    return unit * factor;
+    // The exhausted floor is relative to the puck (no small-screen boost) so
+    // running out of stamina is just as punishing on phones
+    const exhausted = this.baseSpeed * this.speedMultiplier * Settings.PUSHER_EXHAUSTED_SPEED_FACTOR;
+    const full = unit * Settings.PUSHER_MAX_SPEED_FACTOR;
+    return exhausted + (full - exhausted) * pusher.stamina;
   }
 
   randomPowerUpDelay() {
@@ -311,6 +313,43 @@ export class Game {
       pusher.staminaRegenDelay -= dt;
     } else {
       pusher.stamina = Math.min(1, pusher.stamina + regenRate * dt);
+    }
+  }
+
+  // A fast-moving pusher leaves a trail of fire pixels off its back edge,
+  // denser the faster it goes. A tired pusher is capped below the trail's
+  // speed, so the fire going out shows stamina even under a finger.
+  spawnFireTrail(pusher, dt) {
+    if (dt <= 0 || pusher.returningHome) return;
+    const unit = this.pusherBaseSpeed * this.speedMultiplier;
+    const dx = pusher.x - pusher.prevX;
+    const dy = pusher.y - pusher.prevY;
+    const speed = Math.hypot(dx, dy) / dt / unit;
+    const minSpeed = Settings.FIRE_TRAIL_SPEED_FACTOR;
+    if (speed <= minSpeed) {
+      pusher.fireTimer = 0;
+      return;
+    }
+    const heat = Math.min(1, (speed - minSpeed) / (Settings.PUSHER_MAX_SPEED_FACTOR - minSpeed));
+    pusher.fireTimer = (pusher.fireTimer || 0) + dt * Settings.FIRE_TRAIL_RATE * heat;
+    const dirX = dx / Math.hypot(dx, dy);
+    const dirY = dy / Math.hypot(dx, dy);
+    const scale = Math.min(this.width, this.height);
+    while (pusher.fireTimer >= 1) {
+      pusher.fireTimer -= 1;
+      // Somewhere across the back half of the pusher, drifting backwards
+      const side = (Math.random() * 2 - 1) * pusher.radius * 0.8;
+      const drift = scale * (0.05 + Math.random() * 0.1);
+      const roll = Math.random();
+      this.goalPixels.push({
+        x: pusher.x - dirX * pusher.radius * 0.6 - dirY * side,
+        y: pusher.y - dirY * pusher.radius * 0.6 + dirX * side,
+        vx: -dirX * drift + (Math.random() - 0.5) * drift,
+        vy: -dirY * drift + (Math.random() - 0.5) * drift,
+        age: 0,
+        life: 0.2 + Math.random() * 0.25 * (0.5 + heat),
+        color: roll < 0.3 ? '#ffe14d' : roll < 0.75 ? '#ff8a1f' : '#ff3b1f',
+      });
     }
   }
 
@@ -726,6 +765,7 @@ export class Game {
       pusher.finalY = pusher.y;
 
       this.updateStamina(pusher, dt);
+      this.spawnFireTrail(pusher, dt);
     }
 
     // 2b. Periodic splitting: each puck splits in two every splitInterval seconds

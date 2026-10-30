@@ -10,6 +10,7 @@ export const AI_DIFFICULTY = {
     tracksOpponentSide: false, // anticipate by mirroring puck clusters on opponent's side
     chasesOwnSide: true,       // chase pucks already on AI's side
     collectsPowerUps: false,   // leave the goal to grab speed drops when no puck is incoming
+    managesStamina: false,     // stand still to refill stamina whenever there's time to spare
   },
   medium: {
     sprintFactor: 2.0,
@@ -18,6 +19,7 @@ export const AI_DIFFICULTY = {
     tracksOpponentSide: true,
     chasesOwnSide: true,
     collectsPowerUps: true,
+    managesStamina: false,
   },
   hard: {
     sprintFactor: 2.6,
@@ -26,6 +28,7 @@ export const AI_DIFFICULTY = {
     tracksOpponentSide: true,
     chasesOwnSide: true,
     collectsPowerUps: true,
+    managesStamina: true,
   },
 };
 
@@ -36,6 +39,17 @@ const AI_BOOST_SPEED_FACTOR = 2;
 // Slow enough to be cheap, but it still drains stamina like any movement.
 const AI_CRUISE_FACTOR = 0.95;
 
+// Stamina management (managesStamina). Stamina only refills while standing still,
+// so a rested AI moves late and in bursts instead of constantly drifting.
+// REST_SAFETY_FACTOR  — how much longer than the trip itself the AI wants in hand
+//                       before it will keep resting while a puck is incoming.
+// REST_SAFETY_MARGIN  — extra seconds on top, for bounces and reaction time.
+// TIRED_STAMINA       — below this, a puck on its side drifting away from its goal
+//                       isn't worth chasing; it rests instead.
+const REST_SAFETY_FACTOR = 1.6;
+const REST_SAFETY_MARGIN = 0.35;
+const TIRED_STAMINA = 0.45;
+
 export class AIController {
   constructor(rules = AI_DIFFICULTY.hard) {
     this.rules = rules;
@@ -43,7 +57,7 @@ export class AIController {
 
   update(pusher, pucks, gameState, dt) {
     const { width, height, goalSizes, baseSpeed, speedMultiplier, maxSpeed, powerUp } = gameState;
-    const { targetX, targetY, urgent } = this._computeTarget(pusher, pucks, width, height, goalSizes, powerUp);
+    const { targetX, targetY, urgent, puck } = this._computeTarget(pusher, pucks, width, height, goalSizes, powerUp);
 
     // Like a human, the AI sprints only when it has to (a puck to play or a drop
     // to grab) and otherwise repositions at a slow cruising speed. All movement
@@ -66,6 +80,12 @@ export class AIController {
     const dy = targetY - pusher.y;
     const dist = Math.hypot(dx, dy);
 
+    if (dist > 0 && this.rules.managesStamina && this._shouldRest(pusher, puck, urgent, dist, aiSpeed, width)) {
+      pusher.vx = 0;
+      pusher.vy = 0;
+      return;
+    }
+
     if (dist > 0) {
       const moveDist = Math.min(aiSpeed * dt, dist);
       pusher.vx = (dx / dist) * aiSpeed;
@@ -76,6 +96,28 @@ export class AIController {
       pusher.vx = 0;
       pusher.vy = 0;
     }
+  }
+
+  // Whether holding still to refill stamina is safe right now
+  _shouldRest(pusher, puck, urgent, dist, aiSpeed, width) {
+    if (pusher.boostTimer > 0 || pusher.stamina >= 1) return false;
+
+    if (!urgent) {
+      // Repositioning without a threat: don't chase small shifts of the target,
+      // and tolerate more drift the more tired it is
+      return dist < pusher.radius * (1 + 4 * (1 - pusher.stamina));
+    }
+    if (!puck) return false; // racing for a power-up (it refills stamina anyway)
+
+    if (puck.vx > 0) {
+      // Incoming: rest while it can still get there in time by leaving later
+      const timeToArrive = (pusher.x - puck.x) / puck.vx;
+      const timeNeeded = dist / Math.max(aiSpeed, 1e-6);
+      return timeToArrive > timeNeeded * REST_SAFETY_FACTOR + REST_SAFETY_MARGIN;
+    }
+
+    // On its side but heading away from its goal: only worth chasing with stamina to spare
+    return puck.x > width / 2 && pusher.stamina < TIRED_STAMINA;
   }
 
   _computeTarget(pusher, pucks, width, height, goalSizes, powerUp) {
@@ -93,7 +135,7 @@ export class AIController {
     }
 
     if (closestIncoming) {
-      return { ...this._targetForPuck(pusher, closestIncoming, width, height, goalSizes, defaultX - pusher.radius), urgent: true };
+      return { ...this._targetForPuck(pusher, closestIncoming, width, height, goalSizes, defaultX - pusher.radius), urgent: true, puck: closestIncoming };
     }
 
     // Priority 1b: nothing incoming, so it's safe to leave the goal for a speed drop
@@ -112,7 +154,7 @@ export class AIController {
         }
       }
       if (closestOnSide) {
-        return { ...this._targetForPuck(pusher, closestOnSide, width, height, goalSizes, closestOnSide.x - pusher.radius), urgent: true };
+        return { ...this._targetForPuck(pusher, closestOnSide, width, height, goalSizes, closestOnSide.x - pusher.radius), urgent: true, puck: closestOnSide };
       }
     }
 

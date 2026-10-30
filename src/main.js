@@ -150,7 +150,11 @@ function onGameOver(winningTeam) {
   inputManager.cleanup();
   uiWinScreen.classList.add('active');
   refreshTip();
-  winText.innerText = `Team ${winningTeam} Wins!`;
+  if (lastNumPlayers === 1) {
+    winText.innerText = winningTeam === 1 ? 'You Win!' : 'You Lose 😞';
+  } else {
+    winText.innerText = `Team ${winningTeam} Wins!`;
+  }
   let color = '#00ffff';
   if (winningTeam === 2) color = '#ff00ff';
   if (winningTeam === 3) color = '#ffff00';

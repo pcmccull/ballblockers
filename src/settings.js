@@ -52,7 +52,10 @@ export const MOMENTUM_MAX_BOOST_FACTOR = 1.5;
 // constant fast swiping wears it down and leaves it slow when it matters.
 // Speeds are multiples of baseSpeed * speedMultiplier (i.e. relative to puck speed).
 // PUSHER_MAX_SPEED_FACTOR       — top speed with a full stamina bar.
-// PUSHER_EXHAUSTED_SPEED_FACTOR — top speed with an empty stamina bar.
+// PUSHER_EXHAUSTED_SPEED_FACTOR — top speed with an empty stamina bar. Always measured
+//                                 against the puck, without the small-screen pusher
+//                                 boost, so a tired pusher struggles to cover both
+//                                 goals on every device.
 // STAMINA_TRAVEL_FRACTION       — distance a full stamina bar covers, as a fraction of the
 //                                 board's length along the center line (its height, with goals
 //                                 left and right). Drain is per distance moved, so this holds
@@ -61,13 +64,20 @@ export const MOMENTUM_MAX_BOOST_FACTOR = 1.5;
 // STAMINA_REGEN_DELAY           — seconds after the last drain before regen starts.
 // Stamina runs from 0 (empty) to 1 (full).
 export const PUSHER_MAX_SPEED_FACTOR = 5.0;
-export const PUSHER_EXHAUSTED_SPEED_FACTOR = 2.0;
+export const PUSHER_EXHAUSTED_SPEED_FACTOR = 1.3;
 export const STAMINA_TRAVEL_FRACTION = 0.8;
-export const STAMINA_REGEN_RATE = 0.4;
-export const STAMINA_REGEN_DELAY = 0.4;
+export const STAMINA_REGEN_RATE = 0.6;
+export const STAMINA_REGEN_DELAY = 0.15;
 // 3-player games refill more slowly: each pusher guards two borders, so
 // constant swiping should leave it tired.
-export const THREE_PLAYER_STAMINA_REGEN_RATE = 0.25;
+export const THREE_PLAYER_STAMINA_REGEN_RATE = 0.375;
+// Fire trail: a pusher moving faster than FIRE_TRAIL_SPEED_FACTOR (same units as
+// PUSHER_MAX_SPEED_FACTOR) leaves a trail of fire pixels, densest at full speed.
+// It sits above PUSHER_EXHAUSTED_SPEED_FACTOR so a tired pusher can't light it,
+// which shows stamina without needing to see the fill under your finger.
+// FIRE_TRAIL_RATE is pixels per second at full-stamina top speed.
+export const FIRE_TRAIL_SPEED_FACTOR = 3.0;
+export const FIRE_TRAIL_RATE = 60;
 
 // Speed power-up: a drop appears at a random spot on the center line between
 // zones, the farthest a pusher can go from its goal. The first pusher
